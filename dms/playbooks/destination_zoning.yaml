@@ -1,0 +1,64 @@
+---
+-   name: Obtain DMS Destination Ports Information
+    hosts: localhost # Insertion operations are REST API based therefore it will be executed locally
+    become: false
+    gather_facts: false
+    vars_files:
+        - ../vars/destination_vars.yaml
+        - ../vars/dms_vars.yaml
+    tasks:
+        -   name: Retrieve Destination HBA Information from DMS
+            uri:
+                url: "https://{{ dms.host }}/api/appliances/{{ dms_appliance_name }}/fc-ports"
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+            register: fc_port_list
+
+        -   name: Setting Destination Port to Fact
+            set_fact:
+                dms_initiator_hba: "{{ fc_port_list.json.destinationHbas | selectattr('portId','==', dms_appliance_destination_port )| first }}"
+
+-   name: Creating Destination Zones
+    hosts: switch
+    vars_files:
+        - ../vars/destination_vars.yaml
+        - ../vars/dms_vars.yaml
+    become: false
+    gather_facts: false
+    vars:
+        ansible_host: "{{ destination_switch.host}}"
+        ansible_user: "{{ destination_switch.username}}"
+        ansible_password: "{{ destination_switch.password}}"
+    tasks:
+        -   name: Create Destination Target to DMS Initiator Zone
+            cisco.nxos.nxos_zone_zoneset:
+                zone_zoneset_details:
+                    -   vsan: "{{destination_switch.vsan}}"
+                        mode: basic
+                        zone:
+                            -   members:
+                                    -   pwwn: "{{ hostvars.localhost.dms_initiator_hba.wwpn }}"
+                                    -   pwwn: "{{ destination_target.wwpn }}"
+                                name: "{{ destination_switch.zones.destination_to_dms_initiators }}"
+
+        -   name: Add New Zones to active zoneset
+            cisco.nxos.nxos_zone_zoneset:
+                zone_zoneset_details:
+                    -   vsan: "{{ destination_switch.vsan }}"
+                        mode: basic
+                        zoneset:
+                            -   action: activate
+                                remove: false
+                                name: "{{ destination_switch.zoneset }}"
+                                members:
+                                    -   name: "{{ destination_switch.zones.destination_to_dms_initiators }}"
+        -   name: Enable Destination Switch Ports
+            cisco.nxos.nxos_command:
+                commands:
+                    - config
+                    - "interface {{ dms_appliance_destination_port_switch_interface }}"
+                    - no shutdown
+                    - exit
+

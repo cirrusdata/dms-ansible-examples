@@ -6,6 +6,8 @@ name = "dms-ansible"
 [packages]
 ansible = "*"
 paramiko = "*"
+purestorage = "*"
+py-pure-client = "*"
 
 [dev-packages]
 

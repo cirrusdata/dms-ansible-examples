@@ -1,0 +1,18 @@
+dms_appliance_name: DMS-125
+dms_appliance_destination_port: 120
+dms_appliance_destination_port_switch_interface: fc1/5
+
+
+destination_target:
+    wwpn: 524a93781d6ca500
+    switch_interface: fc1/12
+
+destination_switch:
+    host: 172.23.60.238
+    username: admin
+    password: CDSi2012
+
+    vsan: 1
+    zoneset: SW238VSAN1
+    zones:
+        destination_to_dms_initiators: ans-DMS-125-S120-Pure-T1

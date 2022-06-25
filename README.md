@@ -3,6 +3,12 @@
 This repository provides a series of Ansible playbooks that performs an end-to-end zero downtime migration using Cirrus Data's **Cirrus Migrate On-Prem
 v2022** (DMS).
 
+======================================================
+
+**Caution: THIS IS AN EXAMPLE THAT CAN ONLY BE RUN AS-IS IN A PREDEFINED DEMO ENVIRONMENT. IT WILL NOT WORK ON JUST ANY ARBITRARY ENVIRONMENT WITHOUT CUSTOMIZATION.**
+
+=======================================================
+
 # Prerequisites
 
 Before you start, you should have:
@@ -34,7 +40,9 @@ In this environment:
 # Playbooks
 Multiple playbooks are included in this repository. 
 
-
+## insertion.yaml
+## destination_zoning.yaml
+## migration.yaml
 
 # Customization
 

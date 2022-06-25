@@ -2,7 +2,8 @@
 -   name: Disable Nexus Ports from Switch
     hosts: switch
     vars_files:
-        - vars.yaml
+        - ../vars/dms_vars.yaml
+        - ../vars/insertion_vars.yaml
     become: false
     gather_facts: false
     vars:
@@ -25,7 +26,8 @@
     become: false
     gather_facts: false
     vars_files:
-        - vars.yaml
+        - ../vars/dms_vars.yaml
+        - ../vars/insertion_vars.yaml
     tasks:
         -   name: Retrieve Nexus Information from DMS
             uri:

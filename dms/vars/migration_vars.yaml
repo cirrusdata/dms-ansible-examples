@@ -1,0 +1,13 @@
+source_volumes:
+    -   uuid: 60060163-00ad-a8e9-6656-000000000006
+        name: DiskA
+    -   uuid: 60060163-00ad-a8e9-6656-000000000007
+        name: DiskB
+    -   uuid: 60060163-00ad-a8e9-6656-000000000008
+        name: DiskC
+    -   uuid: 60060163-00ad-a8e9-6656-000000000009
+        name: DiskK
+
+destination_storage:
+    host: 192.168.2.8
+    fa_api_token: 852ebbc2-2ac7-db06-8834-761abc477792

@@ -1,0 +1,162 @@
+---
+###################################
+# This task will synchronize migration session one more time before performing final cutover
+# This step can be repeated as often as you like until a cutover time becomes convenient
+###################################
+-   name: Synchronize Migration Session
+    hosts: localhost
+    become: false
+    gather_facts: false
+    vars_files:
+        - ../vars/dms_vars.yaml
+    tasks:
+        -   name: Retrieve Migration Session Information
+            uri:
+                url: "https://{{ dms.host }}/api/migration-sessions"
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+            register: migration_session_list
+        -   name: Get Migration Session ID
+            set_fact:
+                migration_session_id: "{{ migration_session_list.json.sessions[0].id }}"
+
+        -   name: Trigger Migration Sync
+            uri:
+                url: "https://{{ dms.host }}/api/migration-sessions/{{ migration_session_id }}/actions:sync"
+                method: POST
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+
+        -   name: Wait until Migration Session goes back to Pending Complete
+            uri:
+                url: "https://{{ dms.host }}/api/migration-sessions/{{ migration_session_id }}"
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+            register: migration_session_info
+            delay: 15
+            retries: 20
+            until: "migration_session_info.json.session.status == 'PENDING_COMPLETE'"
+
+###################################
+# The following tasks will be run on application host. A script is already prepared on the host to stop the sample application: the Postgres database
+# In reality, this should be modified to ensure application is stopped and cache is flushed
+# Note that this example is a simple local migration cutover that takes the application offline to transition to the new storage.
+# To learn more about alternative cutover methods, contact Cirrus Data Support.
+###################################
+-   name: Stop Application and Unmount before Final Synchronization
+    hosts: initiator
+    become: false
+    gather_facts: false
+    vars_files:
+        - ../vars/insertion_vars.yaml
+        - ../vars/dms_vars.yaml
+    vars:
+        ansible_host: "{{ host.host }}"
+        ansible_user: "{{ host.username }}"
+        ansible_password: "{{ host.password }}"
+    tasks:
+        -   name: Shutdown Application and Unmount data disks
+            shell:
+                cmd: bash /root/C_Post_Insertion/26_StopAppUnmountDisableLv.sh
+
+###################################
+# This play will go back to the DMS and complete the migration session.
+# Once a migration session is completed, tracking will stop and migration session will be concluded.
+###################################
+-   name: Complete Migration Session
+    hosts: localhost
+    become: false
+    gather_facts: false
+    vars_files:
+        - ../vars/dms_vars.yaml
+    tasks:
+        -   name: Trigger Migration Completion
+            uri:
+                url: "https://{{ dms.host }}/api/migration-sessions/{{ migration_session_id }}/actions:finalize"
+                method: POST
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+
+        -   name: Wait until Migration Session is Completed
+            uri:
+                url: "https://{{ dms.host }}/api/migration-sessions/{{ migration_session_id }}"
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+            register: migration_session_info
+            delay: 2
+            retries: 100
+            until: "migration_session_info.json.session.status == 'COMPLETE'"
+
+###################################
+# Next play will zone host initiators directly to
+# Once removed, host will no longer be connected to DMS upstream port
+###################################
+###################################
+# This play will then remove insertion zones from the switch.
+# Once removed, host will no longer be connected to DMS upstream port
+###################################
+-   name: Removing Insertion Zones
+    hosts: switch
+    vars_files:
+        - ../vars/insertion_vars.yaml
+        - ../vars/dms_vars.yaml
+    become: false
+    gather_facts: false
+    vars:
+        ansible_host: "{{ switch.host }}"
+        ansible_user: "{{ switch.username }}"
+        ansible_password: "{{ switch.password }}"
+    tasks:
+        -   name: Remove Zones from active zoneset
+            cisco.nxos.nxos_zone_zoneset:
+                zone_zoneset_details:
+                    -   vsan: "{{switch.vsan}}"
+                        mode: basic
+                        zoneset:
+                            -   action: activate
+                                remove: false
+                                name: "{{ switch.zoneset }}"
+                                members:
+#                                    -   name: "{{switch.zones.downstream_to_target}}"
+#                                        remove: true
+                                    -   name: "{{switch.zones.initiator_to_virtual_target}}"
+                                        remove: true
+                                    -   name: "{{switch.zones.virtual_initiator_to_target}}"
+                                        remove: true
+
+#        -   name: Delete Downstream to Target Zone
+#            cisco.nxos.nxos_zone_zoneset:
+#                zone_zoneset_details:
+#                    -   vsan: "{{switch.vsan}}"
+#                        mode: basic
+#                        zone:
+#                            -   remove: true
+#                                name: "{{switch.zones.downstream_to_target}}"
+        -   name: Delete Virtual Initiators to Target Zone
+            cisco.nxos.nxos_zone_zoneset:
+                zone_zoneset_details:
+                    -   vsan: "{{switch.vsan}}"
+                        mode: basic
+                        zone:
+                            -   remove: true
+                                name: "{{switch.zones.virtual_initiator_to_target}}"
+
+        -   name: Remove Initiator to Virtual Target Zone
+            cisco.nxos.nxos_zone_zoneset:
+                zone_zoneset_details:
+                    -   vsan: "{{switch.vsan}}"
+                        mode: basic
+                        zone:
+                            -   remove: true
+                                name: "{{switch.zones.initiator_to_virtual_target}}"
+

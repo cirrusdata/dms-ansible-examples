@@ -38,7 +38,3 @@ initiator:
     wwpn: 21000024ff69dca1
     virtual_wwpn: 21013a5e0369dca1
     switch_interface: fc1/4
-
-destination_storage:
-    host: 192.168.2.8
-    fa_api_token: 852ebbc2-2ac7-db06-8834-761abc477792

@@ -1,0 +1,84 @@
+switch:
+    -   name: FabricA
+        host: 172.23.60.238
+        username: admin
+        password: CDSi2012
+        vsan: 1
+        zoneset: SW238VSAN1
+
+    -   name: FabricB
+        host: 172.23.60.238
+        username: admin
+        password: CDSi2012
+        vsan: 2
+        zoneset: SW238VSAN2
+
+
+host:
+    host: 172.23.60.125
+    username: admin
+    password: CDSi101
+
+    ports:
+        AppHostC1_i1:
+            wwpn: 21000024ff69dca1
+            switch: FabricA
+            switch_interface: fc1/4
+        AppHostC1_i2:
+            wwpn: 21000024ff69dcab
+            switch: FabricA
+            switch_interface: fc1/37
+
+storage:
+    source:
+        vendor: CirrusData
+        targets:
+            SRC_T1:
+                wwpn: 21000060166cc13c
+            SRC_T2:
+                wwpn: 21000060166cc13d
+    destination:
+        vendor: Pure
+        host: 192.168.2.8
+        fa_api_token: 852ebbc2-2ac7-db06-8834-761abc477792
+        targets:
+            PURE_T1:
+                wwpn: 524a93781d6ca500
+            PURE_T2:
+                wwpn: 524a93781d6ca510
+
+dms:
+    host: 172.23.60.125
+    username: admin
+    password: CDSi101
+
+    nexus:
+        DMS-125-Nexus1:
+            switch: FabricA
+            upstream_switch_interface: fc1/3
+            downstream_switch_interface: fc1/4
+
+        DMS-126-Nexus1:
+            switch: FabricB
+            upstream_switch_interface: fc1/35
+            downstream_switch_interface: fc1/36
+
+    initiators:
+        -   name: DMS-125-120
+            port: 120
+            wwpn: 210024a9376debbc
+            switch: FabricA
+            switch_interface: fc1/5
+
+        -   name: DMS-126-120
+            port: 120
+            wwpn: 210024a9376debbd
+            switch: FabricB
+            switch_interface: fc1/37
+
+insertion:
+    - nexus: DMS-125-Nexus1
+      initiator: AppHostC1_i1
+      target: SRC_T1
+      virtual_initiator_wwpn: 21013a5e036cc13c
+      virtual_target_wwpn: 21013a5e036cc13c

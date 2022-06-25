@@ -2,8 +2,8 @@
 -   name: Prepare Switch For Insertion
     hosts: switch
     vars_files:
-        - vars/insertion_vars.yaml
-        - vars/dms_vars.yam
+        - ../vars/insertion_vars.yaml
+        - ../vars/dms_vars.yaml
     become: false
     gather_facts: false
     vars:
@@ -31,8 +31,8 @@
     become: false
     gather_facts: false
     vars_files:
-        - vars/insertion_vars.yaml
-        - vars/dms_vars.yam
+        - ../vars/insertion_vars.yaml
+        - ../vars/dms_vars.yaml
     tasks:
         -   name: Retrieve Nexus Information from DMS
             uri:
@@ -87,8 +87,8 @@
 -   name: Creating Insertion Zones
     hosts: switch
     vars_files:
-        - vars/insertion_vars.yaml
-        - vars/dms_vars.yam
+        - ../vars/insertion_vars.yaml
+        - ../vars/dms_vars.yaml
     become: false
     gather_facts: false
     vars:
@@ -148,8 +148,8 @@
     become: false
     gather_facts: false
     vars_files:
-        - vars/insertion_vars.yaml
-        - vars/dms_vars.yam
+        - ../vars/insertion_vars.yaml
+        - ../vars/dms_vars.yaml
     tasks:
         -   name: Add Virtual Initiator to Host Entity
             uri:
@@ -168,8 +168,8 @@
 -   name: Host Rescan for New Path
     hosts: initiator
     vars_files:
-        - vars/insertion_vars.yaml
-        - vars/dms_vars.yam
+        - ../vars/insertion_vars.yaml
+        - ../vars/dms_vars.yaml
     become: false
     gather_facts: false
     vars:
@@ -184,7 +184,7 @@
 
         -   name: Print Multipath Output
             debug:
-                var: multipath_output
+                var: multipath_output.stdout_lines
 
         -   name: Rescan SCSI Hosts
             shell:
@@ -197,7 +197,7 @@
 
         -   name: Print Multipath Output After Rescan
             debug:
-                var: multipath_output
+                var: multipath_output.stdout_lines
 
 
 -   name: Remove Original Path to Source Storage via LUN Masking
@@ -205,8 +205,8 @@
     become: false
     gather_facts: false
     vars_files:
-        - vars/insertion_vars.yaml
-        - vars/dms_vars.yam
+        - ../vars/insertion_vars.yaml
+        - ../vars/dms_vars.yaml
     tasks:
         -   name: Get All Initiators from Host Entity at Source Storage
             uri:
@@ -235,8 +235,8 @@
 -   name: Host Rescan after Original Path is removed
     hosts: initiator
     vars_files:
-        - vars/insertion_vars.yaml
-        - vars/dms_vars.yam
+        - ../vars/insertion_vars.yaml
+        - ../vars/dms_vars.yaml
     become: false
     gather_facts: false
     vars:
@@ -253,4 +253,21 @@
             register: multipath_output
         -   name: Print Multipath Output After Rescan
             debug:
-                var: multipath_output
+                var: multipath_output.stdout_lines
+
+-   name: Rescan DMS after Insertion
+    hosts: localhost # Insertion operations are REST API based therefore it will be executed locally
+    become: false
+    gather_facts: false
+    vars_files:
+        - ../vars/dms_vars.yaml
+        - ../vars/insertion_vars.yaml
+    tasks:
+        -   name: Rescan Source Configuration
+            uri:
+                url: "https://{{ dms.host }}/api/source/actions:rescan"
+                method: POST
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
