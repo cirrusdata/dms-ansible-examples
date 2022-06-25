@@ -1,0 +1,22 @@
+---
+-   name: Test
+    hosts: localhost # Insertion operations are REST API based therefore it will be executed locally
+    become: false
+    gather_facts: false
+    vars_files:
+        - vars.yaml
+    tasks:
+        -   name: Get All Initiators from Host Entity at Source Storage
+            uri:
+                url: "https://{{ source_storage.host }}/api/v1/storage/clients/{{ initiator.host_entity_id_in_storage }}"
+                method: GET
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+            register: host_info_from_source_storage
+        -   name: Find Original Initiator in Host Entity
+            set_fact:
+                source_storage_original_initiator_id: "{{ (host_info_from_source_storage.json.initiators | selectattr('initiator', '==', initiator.wwpn) | first).initiator }}"
+        -   debug:
+                var: source_storage_original_initiator_id

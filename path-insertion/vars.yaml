@@ -1,0 +1,43 @@
+dms:
+    host: 172.23.60.125
+    username: admin
+    password: CDSi101
+nexus:
+    name: DMS-125-Nexus1
+    upstream_switch_interface: fc1/3
+    downstream_switch_interface: fc1/4
+
+switch:
+    host: 172.23.60.238
+    username: admin
+    password: CDSi2012
+
+    vsan: 1
+    zoneset: SW238VSAN1
+    zones:
+        downstream_to_target: ans-DMS-125-Nexus1_Downstream_to_DGSSRCVNX_T1
+        virtual_initiator_to_target: ans-21013a5e0369dca1-to-21000060166cc13c
+        initiator_to_virtual_target: ans-21000024ff69dca1-to-21013a5e036cc13c
+
+initiator:
+    wwpn: 21000024ff69dca1
+    virtual_wwpn: 21013a5e0369dca1
+    switch_interface: fc1/4
+
+    host_ip: 172.23.60.121
+    host_username: root
+    host_password: CDSi101
+
+    # Host Entity ID in source storage configuration. Obtain from source storage's UI / CLI
+    host_entity_id_in_storage : "2"
+
+target:
+    wwpn: 21000060166cc13c
+    virtual_wwpn: 21013a5e036cc13c
+    switch_interface: fc1/5
+
+# In this demo, Cirrus's Phoenix Storage Server is used as source storage
+source_storage:
+    host: 172.23.60.197
+    username: admin
+    password: CDSi101
