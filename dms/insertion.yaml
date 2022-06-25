@@ -2,7 +2,8 @@
 -   name: Prepare Switch For Insertion
     hosts: switch
     vars_files:
-        - vars.yaml
+        - vars/insertion_vars.yaml
+        - vars/dms_vars.yam
     become: false
     gather_facts: false
     vars:
@@ -30,7 +31,8 @@
     become: false
     gather_facts: false
     vars_files:
-        - vars.yaml
+        - vars/insertion_vars.yaml
+        - vars/dms_vars.yam
     tasks:
         -   name: Retrieve Nexus Information from DMS
             uri:
@@ -85,7 +87,8 @@
 -   name: Creating Insertion Zones
     hosts: switch
     vars_files:
-        - vars.yaml
+        - vars/insertion_vars.yaml
+        - vars/dms_vars.yam
     become: false
     gather_facts: false
     vars:
@@ -140,17 +143,17 @@
                                     -   name: "{{switch.zones.virtual_initiator_to_target}}"
 
 
-
 -   name: Add Virtual Path to Source Storage via LUN Masking
     hosts: localhost # Storage operations are REST API based therefore it will be executed locally
     become: false
     gather_facts: false
     vars_files:
-        - vars.yaml
+        - vars/insertion_vars.yaml
+        - vars/dms_vars.yam
     tasks:
         -   name: Add Virtual Initiator to Host Entity
             uri:
-                url: "https://{{ source_storage.host }}/api/v1/storage/clients/{{ initiator.host_entity_id_in_storage }}/initiators"
+                url: "https://{{ source_storage.host }}/api/v1/storage/clients/{{ host.host_entity_id_in_storage }}/initiators"
                 method: PATCH
                 url_username: "{{dms.username}}"
                 url_password: "{{dms.password}}"
@@ -162,17 +165,17 @@
                         -   type: FC
                             initiator: "{{ initiator.virtual_wwpn }}"
 
-
 -   name: Host Rescan for New Path
     hosts: initiator
     vars_files:
-        - vars.yaml
+        - vars/insertion_vars.yaml
+        - vars/dms_vars.yam
     become: false
     gather_facts: false
     vars:
-        ansible_host: "{{ initiator.host_ip }}"
-        ansible_user: "{{ initiator.host_username }}"
-        ansible_password: "{{ initiator.host_password }}"
+        ansible_host: "{{ host.host }}"
+        ansible_user: "{{ host.username }}"
+        ansible_password: "{{ host.password }}"
     tasks:
         -   name: Run Multipath Command
             shell:
@@ -202,11 +205,12 @@
     become: false
     gather_facts: false
     vars_files:
-        - vars.yaml
+        - vars/insertion_vars.yaml
+        - vars/dms_vars.yam
     tasks:
         -   name: Get All Initiators from Host Entity at Source Storage
             uri:
-                url: "https://{{ source_storage.host }}/api/v1/storage/clients/{{ initiator.host_entity_id_in_storage }}"
+                url: "https://{{ source_storage.host }}/api/v1/storage/clients/{{ host.host_entity_id_in_storage }}"
                 method: GET
                 url_username: "{{dms.username}}"
                 url_password: "{{dms.password}}"
@@ -218,7 +222,7 @@
                 source_storage_original_initiator_id: "{{ (host_info_from_source_storage.json.initiators | selectattr('initiator', '==', initiator.wwpn) | first).id }}"
         -   name: Remove Original Initiator from Host Entity
             uri:
-                url: "https://{{ source_storage.host }}/api/v1/storage/clients/{{ initiator.host_entity_id_in_storage }}/initiators"
+                url: "https://{{ source_storage.host }}/api/v1/storage/clients/{{ host.host_entity_id_in_storage }}/initiators"
                 method: PATCH
                 url_username: "{{dms.username}}"
                 url_password: "{{dms.password}}"
@@ -231,13 +235,14 @@
 -   name: Host Rescan after Original Path is removed
     hosts: initiator
     vars_files:
-        - vars.yaml
+        - vars/insertion_vars.yaml
+        - vars/dms_vars.yam
     become: false
     gather_facts: false
     vars:
-        ansible_host: "{{ initiator.host_ip }}"
-        ansible_user: "{{ initiator.host_username }}"
-        ansible_password: "{{ initiator.host_password }}"
+        ansible_host: "{{ host.host }}"
+        ansible_user: "{{ host.username }}"
+        ansible_password: "{{ host.password }}"
     tasks:
         -   name: Rescan SCSI Hosts
             shell:

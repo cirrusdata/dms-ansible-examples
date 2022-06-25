@@ -1,0 +1,84 @@
+---
+-   name: Disable Nexus Ports from Switch
+    hosts: switch
+    vars_files:
+        - vars.yaml
+    become: false
+    gather_facts: false
+    vars:
+        ansible_host: "{{ switch.host }}"
+        ansible_user: "{{ switch.username }}"
+        ansible_password: "{{ switch.password }}"
+    tasks:
+        -   name: Disable Nexus Switch Ports
+            cisco.nxos.nxos_command:
+                commands:
+                    - config
+                    - "interface {{ nexus.upstream_switch_interface }}"
+                    - shutdown
+                    - "interface {{ nexus.downstream_switch_interface }}"
+                    - shutdown
+                    - exit
+
+-   name: Cleanup Insertion Configuration from DMS
+    hosts: localhost # Insertion operations are REST API based therefore it will be executed locally
+    become: false
+    gather_facts: false
+    vars_files:
+        - vars.yaml
+    tasks:
+        -   name: Retrieve Nexus Information from DMS
+            uri:
+                url: "https://{{ dms.host }}/api/nexus"
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+            register: nexus_list
+
+        -   name: Setting Nexus Info Fact
+            set_fact:
+                nexus_info: "{{ nexus_list.json.nexuses | selectattr('nexusName','==', nexus.name ) | first }}"
+
+        -   name: Delete Downstream Insertion Mapping
+            uri:
+                url: "https://{{ dms.host }}/api/nexus/{{ nexus.name }}/path-insertion-port-mappings/{{ target.wwpn }}?upstream=false"
+                method: DELETE
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+
+        -   name: Delete Upstream Insertion Mapping
+            uri:
+                url: "https://{{ dms.host }}/api/nexus/{{ nexus.name }}/path-insertion-port-mappings/{{ initiator.wwpn }}?upstream=true"
+                method: DELETE
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+
+        -   name: Rescan Source Configuration
+            uri:
+                url: "https://{{ dms.host }}/api/source/action:rescan"
+                method: POST
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+        -   name: Rescan for Offline Entities
+            uri:
+                url: "https://{{ dms.host }}/api/storage-config/offline-entities/action:rescan"
+                method: POST
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+        -   name: Cleanup Offline Entities
+            uri:
+                url: "https://{{ dms.host }}/api/storage-config/offline-entities"
+                method: DELETE
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
