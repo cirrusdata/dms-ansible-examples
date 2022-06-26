@@ -1,6 +1,6 @@
 # DMS Ansible Playbook Examples
 
-This repository is a series of **Ansible Playbooks** that performs a live migration end-to-end, from insertion to migration and cutover, using Cirrus Data's **Cirrus Migrate On-Prem
+This repository is a series of [**Ansible Playbooks**](dms/playbooks) that automates a live migration end-to-end, from insertion to migration and cutover, using Cirrus Data's **Cirrus Migrate On-Prem
 v2022** (DMS).
 
 
