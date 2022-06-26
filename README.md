@@ -53,7 +53,6 @@ This playbook performs insertion and all necessary remedies. Due to the nature o
 ansible-playbook -i hosts.yaml playbooks/insertion.yaml -e sequence=0
 ansible-playbook -i hosts.yaml playbooks/insertion.yaml -e sequence=1
 ansible-playbook -i hosts.yaml playbooks/insertion.yaml -e sequence=2
-...
 ```
 ![diagram](dms/docs/insertion.svg)
 
@@ -74,7 +73,6 @@ This playbook will follow the configuration file's ``migration`` section and aut
 
 ```bash
 ansible-playbook -i hosts.yaml playbooks/migration.yaml
-...
 ```
 ![diagram](dms/docs/migration.svg)
 
@@ -83,7 +81,6 @@ This playbook will sync and complete migration session, and cut-over application
 
 ```bash
 ansible-playbook -i hosts.yaml playbooks/cutover.yaml
-...
 ```
 ![diagram](dms/docs/cutover.svg)
 
