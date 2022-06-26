@@ -8,8 +8,18 @@
     become: false
     gather_facts: false
     vars_files:
-        - ../vars/dms_vars.yaml
+        - ../vars/config.yaml
+
     tasks:
+        -   name: Retrieve Appliance Information from DMS
+            uri:
+                url: "https://{{ dms.host }}/api/appliances"
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+            register: appliances_data
+
         -   name: Retrieve Migration Session Information
             uri:
                 url: "https://{{ dms.host }}/api/migration-sessions"
@@ -41,7 +51,7 @@
             register: migration_session_info
             delay: 15
             retries: 20
-            until: "migration_session_info.json.session.status == 'PENDING_COMPLETE'"
+            until: "migration_session_info.json.session.status == 'PENDING_COMPLETE' or migration_session_info.json.session.status == 'COMPLETED'"
 
 ###################################
 # The following tasks will be run on application host. A script is already prepared on the host to stop the sample application: the Postgres database
@@ -54,16 +64,23 @@
     become: false
     gather_facts: false
     vars_files:
-        - ../vars/insertion_vars.yaml
-        - ../vars/dms_vars.yaml
+        - ../vars/config.yaml
     vars:
-        ansible_host: "{{ host.host }}"
-        ansible_user: "{{ host.username }}"
-        ansible_password: "{{ host.password }}"
+        ansible_host: "{{ apphost.host }}"
+        ansible_user: "{{ apphost.username }}"
+        ansible_password: "{{ apphost.password }}"
     tasks:
         -   name: Shutdown Application and Unmount data disks
             shell:
                 cmd: bash /root/C_Post_Insertion/26_StopAppUnmountDisableLv.sh
+        -   name: Gather hostname for later host creation
+            shell:
+                cmd: hostname
+            register: hostname_out
+        -   name: Store Hostname to fact
+            set_fact:
+                apphost_hostname: "{{ hostname_out.stdout }}"
+
 
 ###################################
 # This play will go back to the DMS and complete the migration session.
@@ -74,7 +91,7 @@
     become: false
     gather_facts: false
     vars_files:
-        - ../vars/dms_vars.yaml
+        - ../vars/config.yaml
     tasks:
         -   name: Trigger Migration Completion
             uri:
@@ -84,6 +101,7 @@
                 url_password: "{{dms.password}}"
                 force_basic_auth: true
                 validate_certs: false
+            when: "migration_session_info.json.session.status != 'COMPLETED'"
 
         -   name: Wait until Migration Session is Completed
             uri:
@@ -95,12 +113,8 @@
             register: migration_session_info
             delay: 2
             retries: 100
-            until: "migration_session_info.json.session.status == 'COMPLETE'"
+            until: "migration_session_info.json.session.status == 'COMPLETED'"
 
-###################################
-# Next play will zone host initiators directly to
-# Once removed, host will no longer be connected to DMS upstream port
-###################################
 ###################################
 # This play will then remove insertion zones from the switch.
 # Once removed, host will no longer be connected to DMS upstream port
@@ -108,16 +122,27 @@
 -   name: Removing Insertion Zones
     hosts: switch
     vars_files:
-        - ../vars/insertion_vars.yaml
-        - ../vars/dms_vars.yaml
+        - ../vars/config.yaml
     become: false
     gather_facts: false
     vars:
-        ansible_host: "{{ switch.host }}"
-        ansible_user: "{{ switch.username }}"
-        ansible_password: "{{ switch.password }}"
     tasks:
         -   name: Remove Zones from active zoneset
+            loop: "{{ insertion }}"
+            vars:
+                switch: "{{ switches | selectattr('name','==',insert_nexus.switch)  | first }}"
+                insert_nexus: "{{ dms.nexus | selectattr('name','==',item.nexus)  | first}}"
+                insert_initiator: "{{ apphost.ports | selectattr('name','==',item.initiator)  | first}}"
+                insert_target: "{{ storage.source.targets | selectattr('name','==',item.target)  | first}}"
+                zones:
+                    downstream_to_target: "ans-{{insert_nexus.name}}-downstream-to-{{insert_target.name}}"
+                    virtual_initiator_to_target: "ans-V{{insert_initiator.name}}-to-{{insert_target.name}}"
+                    initiator_to_virtual_target: "ans-{{insert_initiator.name}}-to-V{{insert_target.wwpn}}"
+
+                ansible_host: "{{ (switches | selectattr('name','==',insert_nexus.switch)  | first).host }}"
+                ansible_user: "{{ (switches | selectattr('name','==',insert_nexus.switch)  | first).username }}"
+                ansible_password: "{{ (switches | selectattr('name','==',insert_nexus.switch)  | first).password }}"
+
             cisco.nxos.nxos_zone_zoneset:
                 zone_zoneset_details:
                     -   vsan: "{{switch.vsan}}"
@@ -127,36 +152,140 @@
                                 remove: false
                                 name: "{{ switch.zoneset }}"
                                 members:
-#                                    -   name: "{{switch.zones.downstream_to_target}}"
-#                                        remove: true
-                                    -   name: "{{switch.zones.initiator_to_virtual_target}}"
+                                    -   name: "{{zones.downstream_to_target}}"
                                         remove: true
-                                    -   name: "{{switch.zones.virtual_initiator_to_target}}"
+                                    -   name: "{{zones.initiator_to_virtual_target}}"
+                                        remove: true
+                                    -   name: "{{zones.virtual_initiator_to_target}}"
                                         remove: true
 
-#        -   name: Delete Downstream to Target Zone
-#            cisco.nxos.nxos_zone_zoneset:
-#                zone_zoneset_details:
-#                    -   vsan: "{{switch.vsan}}"
-#                        mode: basic
-#                        zone:
-#                            -   remove: true
-#                                name: "{{switch.zones.downstream_to_target}}"
-        -   name: Delete Virtual Initiators to Target Zone
+        -   name: Delete Zones
+            loop: "{{ insertion }}"
+            vars:
+                switch: "{{ switches | selectattr('name','==',insert_nexus.switch)  | first }}"
+                insert_nexus: "{{ dms.nexus | selectattr('name','==',item.nexus)  | first}}"
+                insert_initiator: "{{ apphost.ports | selectattr('name','==',item.initiator)  | first}}"
+                insert_target: "{{ storage.source.targets | selectattr('name','==',item.target)  | first}}"
+                zones:
+                    downstream_to_target: "ans-{{insert_nexus.name}}-downstream-to-{{insert_target.name}}"
+                    virtual_initiator_to_target: "ans-V{{insert_initiator.name}}-to-{{insert_target.name}}"
+                    initiator_to_virtual_target: "ans-{{insert_initiator.name}}-to-V{{insert_target.wwpn}}"
+
+                ansible_host: "{{ (switches | selectattr('name','==',insert_nexus.switch)  | first).host }}"
+                ansible_user: "{{ (switches | selectattr('name','==',insert_nexus.switch)  | first).username }}"
+                ansible_password: "{{ (switches | selectattr('name','==',insert_nexus.switch)  | first).password }}"
             cisco.nxos.nxos_zone_zoneset:
                 zone_zoneset_details:
                     -   vsan: "{{switch.vsan}}"
                         mode: basic
                         zone:
                             -   remove: true
-                                name: "{{switch.zones.virtual_initiator_to_target}}"
+                                name: "{{zones.downstream_to_target}}"
+                            -   remove: true
+                                name: "{{zones.virtual_initiator_to_target}}"
+                            -   remove: true
+                                name: "{{zones.initiator_to_virtual_target}}"
+###################################
+# This play will then create new host entity at destination storage and assign the migrated volumes to the host directly
+###################################
+-   name: Create Application Host Entity on Destination Storage
+    hosts: localhost
+    become: false
+    gather_facts: false
+    vars_files:
+        - ../vars/config.yaml
+    tasks:
+        -   name: Gather All Application Host Ports
+            loop: "{{ apphost.ports }}"
+            set_fact:
+                host_wwpns: "{{ (host_wwpns | default([])) + [item.wwpn] }}"
 
-        -   name: Remove Initiator to Virtual Target Zone
+        -   name: Create Host Entity on Pure FlashArray
+            purestorage.flasharray.purefa_host:
+                name: "{{ hostvars.initiator.apphost_hostname }}"
+                wwns: "{{ host_wwpns  }}"
+                state: present
+                fa_url: "{{ storage.destination.host }}"
+                api_token: "{{ storage.destination.fa_api_token }}"
+
+        -   name: Map Migrated Volumes to Application Host Entity on Pure FlashArray
+            loop: "{{ migration.source_volumes}}"
+            purestorage.flasharray.purefa_host:
+                name: "{{ hostvars.initiator.apphost_hostname }}"
+                volume: "{{ item.name }}"
+                state: present
+                fa_url: "{{ storage.destination.host }}"
+                api_token: "{{ storage.destination.fa_api_token }}"
+
+        -   name: Remove DMS Host Entity on Pure FlashArray
+            purestorage.flasharray.purefa_host:
+                name: "{{appliances_data.json.appliances[0].name }}"
+                state: absent
+                fa_url: "{{ storage.destination.host }}"
+                api_token: "{{ storage.destination.fa_api_token }}"
+###################################
+# Next play will create zoning from destination storage (PURE) to application host directly.
+# The following task will go through all the post cutover zoning specified and create it on the corresponding fabric
+###################################
+-   name: Zone New Storage to Application Host
+    hosts: switch
+    vars_files:
+        - ../vars/config.yaml
+    become: false
+    gather_facts: false
+    vars:
+    tasks:
+        -   name: Add New Production Zones between Host and New Storage
+            loop: "{{ post_cutover_zoning }}"
+            vars:
+                switch: "{{ switches | selectattr('name','==', (apphost.ports | selectattr('name','==',item.initiator)|first).switch)  | first }}"
+                target: "{{ storage.destination.targets | selectattr('name','==',item.target) | first }}"
+                initiator: "{{ apphost.ports | selectattr('name','==',item.initiator)  | first}}"
+                zone_name: "ans-{{ item.initiator }}-to-{{ item.target }}"
+
+                ansible_host: "{{ (switches | selectattr('name','==', (apphost.ports | selectattr('name','==',item.initiator)|first).switch)  | first).host }}"
+                ansible_user: "{{ (switches | selectattr('name','==', (apphost.ports | selectattr('name','==',item.initiator)|first).switch)  | first).username }}"
+                ansible_password: "{{ (switches | selectattr('name','==', (apphost.ports | selectattr('name','==',item.initiator)|first).switch)  | first).password }}"
+
             cisco.nxos.nxos_zone_zoneset:
                 zone_zoneset_details:
                     -   vsan: "{{switch.vsan}}"
                         mode: basic
                         zone:
-                            -   remove: true
-                                name: "{{switch.zones.initiator_to_virtual_target}}"
+                            -   members:
+                                    -   pwwn: "{{ initiator.wwpn }}"
+                                    -   pwwn: "{{ target.wwpn }}"
+                                name: "{{ zone_name }}"
+                        zoneset:
+                            -   action: activate
+                                remove: false
+                                name: "{{ switch.zoneset }}"
+                                members:
+                                    -   name: "{{ zone_name }}"
 
+###################################
+# After new zones are created, the following play will rescan on the application host, which will pick up the
+# new paths directly to the new storage, and start application
+###################################
+-   name: Rescan and Restart Application
+    hosts: initiator
+    become: false
+    gather_facts: false
+    vars_files:
+        - ../vars/config.yaml
+    vars:
+        ansible_host: "{{ apphost.host }}"
+        ansible_user: "{{ apphost.username }}"
+        ansible_password: "{{ apphost.password }}"
+    tasks:
+        -   name: Restart Multipath Service
+            systemd:
+                state: restarted
+                name: multipathd
+        -   name: Rescan Multipath
+            shell:
+                cmd: multipath
+
+        -   name: Start Application
+            shell:
+                cmd: bash /root/C_Post_Insertion/30_RescanHostAndActivateLvDB.sh

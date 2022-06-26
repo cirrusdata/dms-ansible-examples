@@ -10,6 +10,7 @@ purestorage = "*"
 py-pure-client = "*"
 
 [dev-packages]
+ansible-playbook-grapher = "*"
 
 [requires]
 python_version = "3.9"

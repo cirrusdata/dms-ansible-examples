@@ -1,4 +1,4 @@
-switch:
+switches:
     -   name: FabricA
         host: 172.23.60.238
         username: admin
@@ -14,17 +14,20 @@ switch:
         zoneset: SW238VSAN2
 
 
-host:
-    host: 172.23.60.125
-    username: admin
+apphost:
+    host: 172.23.60.121
+    username: root
     password: CDSi101
 
+#    host entity ID in source storage
+    host_entity_id_in_storage : 2
+
     ports:
-        AppHostC1_i1:
+        -   name: AppHostC1_i1
             wwpn: 21000024ff69dca1
             switch: FabricA
             switch_interface: fc1/4
-        AppHostC1_i2:
+        -   name: AppHostC1_i2
             wwpn: 21000024ff69dcab
             switch: FabricA
             switch_interface: fc1/37
@@ -32,19 +35,22 @@ host:
 storage:
     source:
         vendor: CirrusData
+        host: 172.23.60.197
+        username: admin
+        password: CDSi101
         targets:
-            SRC_T1:
+            -   name: SRC_T1
                 wwpn: 21000060166cc13c
-            SRC_T2:
+            -   name: SRC_T2
                 wwpn: 21000060166cc13d
     destination:
         vendor: Pure
         host: 192.168.2.8
         fa_api_token: 852ebbc2-2ac7-db06-8834-761abc477792
         targets:
-            PURE_T1:
+            -   name: PURE_T1
                 wwpn: 524a93781d6ca500
-            PURE_T2:
+            -   name: PURE_T2
                 wwpn: 524a93781d6ca510
 
 dms:
@@ -53,12 +59,12 @@ dms:
     password: CDSi101
 
     nexus:
-        DMS-125-Nexus1:
+        -   name: DMS-125-Nexus1
             switch: FabricA
             upstream_switch_interface: fc1/3
             downstream_switch_interface: fc1/4
 
-        DMS-126-Nexus1:
+        -   name: DMS-126-Nexus1
             switch: FabricB
             upstream_switch_interface: fc1/35
             downstream_switch_interface: fc1/36
@@ -66,19 +72,53 @@ dms:
     initiators:
         -   name: DMS-125-120
             port: 120
-            wwpn: 210024a9376debbc
+            wwpn:  21000024ff69dca8
             switch: FabricA
             switch_interface: fc1/5
 
         -   name: DMS-126-120
             port: 120
-            wwpn: 210024a9376debbd
+            wwpn: 21000024ff698184
             switch: FabricB
             switch_interface: fc1/37
 
 insertion:
-    - nexus: DMS-125-Nexus1
+    -   nexus: DMS-125-Nexus1
+        initiator: AppHostC1_i1
+        target: SRC_T1
+        virtual_initiator_wwpn: 21013a5e0369dca1
+        virtual_target_wwpn: 21013a5e036cc13c
+
+##################
+# Destination Zoning
+#
+# This section should define which DMS initiators should be zoned with which targets from new storage
+##################
+destination_zoning:
+    - target: PURE_T1
+      dms_initiator: DMS-125-120
+    - target: PURE_T2
+      dms_initiator: DMS-126-120
+
+migration:
+    source_volumes:
+        -   uuid: 60060163-00ad-a8e9-6656-000000000006
+            name: DiskA
+        -   uuid: 60060163-00ad-a8e9-6656-000000000007
+            name: DiskB
+        -   uuid: 60060163-00ad-a8e9-6656-000000000008
+            name: DiskC
+        -   uuid: 60060163-00ad-a8e9-6656-000000000009
+            name: DiskK
+
+##################
+# Post Cut-over Zoning
+#
+# Zones will be created during cut-over process.
+# This section should define which host initiators should be zoned with which targets from new storage
+##################
+post_cutover_zoning:
+    - target: PURE_T1
       initiator: AppHostC1_i1
-      target: SRC_T1
-      virtual_initiator_wwpn: 21013a5e036cc13c
-      virtual_target_wwpn: 21013a5e036cc13c
+    - target: PURE_T2
+      initiator: AppHostC1_i2

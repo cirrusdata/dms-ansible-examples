@@ -1,64 +1,85 @@
 ---
--   name: Obtain DMS Destination Ports Information
-    hosts: localhost # Insertion operations are REST API based therefore it will be executed locally
+########################################################
+# First, this play will parse the configuration section based on the specified sequence number
+########################################################
+-   name: Parse Configuration
+    hosts: localhost
     become: false
     gather_facts: false
     vars_files:
-        - ../vars/destination_vars.yaml
-        - ../vars/dms_vars.yaml
+        - ../vars/config.yaml
     tasks:
-        -   name: Retrieve Destination HBA Information from DMS
-            uri:
-                url: "https://{{ dms.host }}/api/appliances/{{ dms_appliance_name }}/fc-ports"
-                url_username: "{{dms.username}}"
-                url_password: "{{dms.password}}"
-                force_basic_auth: true
-                validate_certs: false
-            register: fc_port_list
-
-        -   name: Setting Destination Port to Fact
+        -   name: Ensure sequence is set
+            debug:
+                msg: "Zoning Destination Sequence {{ sequence }}: {{ destination_zoning[sequence|int] }}"
+            failed_when: sequence is not defined
+        -   name: Set Zoning Config
             set_fact:
-                dms_initiator_hba: "{{ fc_port_list.json.destinationHbas | selectattr('portId','==', dms_appliance_destination_port )| first }}"
+                zoning_config: "{{ destination_zoning[sequence|int] }}"
+        -   debug:
+                var: insertion_config
 
+        -   name: Identify Insertion Entities
+            set_fact:
+                target: "{{ storage.destination.targets | selectattr('name','==',zoning_config.target)  | first}}"
+                dms_initiator: "{{ dms.initiators | selectattr('name','==',zoning_config.dms_initiator)  | first}}"
+        -   name: Identify Switch For Insertion
+            set_fact:
+                switch: "{{ switches | selectattr('name','==',dms_initiator.switch)  | first}}"
+        -   name: Identify Zone Names
+            set_fact:
+                zones:
+                    destination_to_dms_initiators: "ans-{{dms_initiator.name}}-to-{{target.name}}"
+########################################################
+# This play will go to the specified switch and create all the required zoning.
+# Once these zones are created, DMS initiator (port 120/121) will see the destination storage.
+########################################################
 -   name: Creating Destination Zones
     hosts: switch
     vars_files:
-        - ../vars/destination_vars.yaml
-        - ../vars/dms_vars.yaml
+        - ../vars/config.yaml
     become: false
     gather_facts: false
     vars:
-        ansible_host: "{{ destination_switch.host}}"
-        ansible_user: "{{ destination_switch.username}}"
-        ansible_password: "{{ destination_switch.password}}"
+        # Copy Variables for easier access
+        target: "{{hostvars.localhost.target}}"
+        dms_initiator: "{{hostvars.localhost.dms_initiator}}"
+        switch: "{{hostvars.localhost.switch}}"
+        zoning_config: "{{hostvars.localhost.insertion_config}}"
+        zones: "{{hostvars.localhost.zones}}"
+
+        # set switch execution
+        ansible_host: "{{ hostvars.localhost.switch.host }}"
+        ansible_user: "{{ hostvars.localhost.switch.username }}"
+        ansible_password: "{{ hostvars.localhost.switch.password }}"
     tasks:
         -   name: Create Destination Target to DMS Initiator Zone
             cisco.nxos.nxos_zone_zoneset:
                 zone_zoneset_details:
-                    -   vsan: "{{destination_switch.vsan}}"
+                    -   vsan: "{{switch.vsan}}"
                         mode: basic
                         zone:
                             -   members:
-                                    -   pwwn: "{{ hostvars.localhost.dms_initiator_hba.wwpn }}"
-                                    -   pwwn: "{{ destination_target.wwpn }}"
-                                name: "{{ destination_switch.zones.destination_to_dms_initiators }}"
+                                    -   pwwn: "{{ dms_initiator.wwpn }}"
+                                    -   pwwn: "{{ target.wwpn }}"
+                                name: "{{ zones.destination_to_dms_initiators }}"
 
         -   name: Add New Zones to active zoneset
             cisco.nxos.nxos_zone_zoneset:
                 zone_zoneset_details:
-                    -   vsan: "{{ destination_switch.vsan }}"
+                    -   vsan: "{{ switch.vsan }}"
                         mode: basic
                         zoneset:
                             -   action: activate
                                 remove: false
-                                name: "{{ destination_switch.zoneset }}"
+                                name: "{{ switch.zoneset }}"
                                 members:
-                                    -   name: "{{ destination_switch.zones.destination_to_dms_initiators }}"
+                                    -   name: "{{ zones.destination_to_dms_initiators }}"
         -   name: Enable Destination Switch Ports
             cisco.nxos.nxos_command:
                 commands:
                     - config
-                    - "interface {{ dms_appliance_destination_port_switch_interface }}"
+                    - "interface {{ dms_initiator.switch_interface }}"
                     - no shutdown
                     - exit
 

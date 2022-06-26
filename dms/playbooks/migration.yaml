@@ -1,11 +1,16 @@
 ---
+########################################################
+# This play will use DMS's REST API to identify the source volumes to be migrated,
+# based on what is specified in the configuration.
+# Once the source volumes are identified, it will rename the volumes to the desired name
+# according to the configuration
+########################################################
 -   name: Identify Source Volumes
     hosts: localhost # DMS operations are REST API based therefore it will be executed locally
     become: false
     gather_facts: false
     vars_files:
-        - ../vars/dms_vars.yaml
-        - ../vars/migration_vars.yaml
+        - ../vars/config.yaml
     tasks:
         -   name: Retrieve Source Volumes List
             uri:
@@ -19,7 +24,7 @@
 
         -   name: Find Source Volumes To Be Migrated
             set_fact:
-                source_volumes_to_be_migrated: "{{ source_volume_data.json.volumes | selectattr('uuid', 'in', (source_volumes|map(attribute='uuid')|join(',')) ) }}"
+                source_volumes_to_be_migrated: "{{ source_volume_data.json.volumes | selectattr('uuid', 'in', (migration.source_volumes|map(attribute='uuid')|join(',')) ) }}"
 
         -   name: Rename Source Volumes
             uri:
@@ -33,7 +38,7 @@
                 body:
                     volumeUuid: "{{ item.uuid }}"
                     # find desired new name from variable file using uuid
-                    newName: "{{ ( source_volumes | selectattr('uuid', '==', item.uuid) | first ).name }}"
+                    newName: "{{ ( migration.source_volumes | selectattr('uuid', '==', item.uuid) | first ).name }}"
             loop: "{{source_volumes_to_be_migrated}}"
 
         -   name: Retrieve Source Volumes List After Rename
@@ -48,15 +53,17 @@
 
         -   name: Find Source Volumes To Be Migrated After Rename
             set_fact:
-                source_volumes_to_be_migrated: "{{ source_volume_data.json.volumes | selectattr('uuid', 'in', (source_volumes|map(attribute='uuid')|join(',')) ) }}"
-
+                source_volumes_to_be_migrated: "{{ source_volume_data.json.volumes | selectattr('uuid', 'in', (migration.source_volumes|map(attribute='uuid')|join(',')) ) }}"
+########################################################
+# Next, this play will retrieve the destination HBA information, and create a host entity on
+# destination storage (a Pure FlashArray in this example) with the WWPN.
+########################################################
 -   name: Create DMS Host Entity on Destination Storage
     hosts: localhost
     become: false
     gather_facts: false
     vars_files:
-        - ../vars/dms_vars.yaml
-        - ../vars/migration_vars.yaml
+        - ../vars/config.yaml
     vars:
         all_destination_ports: [ ]
     tasks:
@@ -89,19 +96,22 @@
                 name: "{{appliances_data.json.appliances[0].name }}"
                 wwns: "{{ all_destination_ports | map(attribute='wwpn')  }}"
                 state: present
-                fa_url: "{{ destination_storage.host }}"
-                api_token: "{{ destination_storage.fa_api_token }}"
+                fa_url: "{{ storage.destination.host }}"
+                api_token: "{{ storage.destination.fa_api_token }}"
 
         -   set_fact:
                 dms_host_entity_name: "{{appliances_data.json.appliances[0].name }}"
-
+########################################################
+# Now that a new host entity is created on the destination storage configuration,
+# this play automatically create destination volumes that matches the source volumes
+# and assign to the DMS appliance (the host entity created in the previous play)
+########################################################
 -   name: Auto-Allocate Destination Volumes
     hosts: localhost
     become: false
     gather_facts: false
     vars_files:
-        - ../vars/dms_vars.yaml
-        - ../vars/migration_vars.yaml
+        - ../vars/config.yaml
     tasks:
         -   name: Create Volume on Destination Storage
             loop: "{{ source_volumes_to_be_migrated }}"
@@ -109,8 +119,8 @@
                 name: "{{ item.deviceName }}"
                 size: "{{ (item.capacity|int) / 1024 / 1024}}M"
                 state: present
-                fa_url: "{{ destination_storage.host }}"
-                api_token: "{{ destination_storage.fa_api_token }}"
+                fa_url: "{{ storage.destination.host }}"
+                api_token: "{{ storage.destination.fa_api_token }}"
             register: destination_volumes_allocated
         -   debug:
                 var: destination_volumes_allocated
@@ -121,16 +131,21 @@
                 volume: "{{ item.deviceName }}"
                 name: "{{ dms_host_entity_name }}"
                 state: present
-                fa_url: "{{ destination_storage.host }}"
-                api_token: "{{ destination_storage.fa_api_token }}"
-
+                fa_url: "{{ storage.destination.host }}"
+                api_token: "{{ storage.destination.fa_api_token }}"
+########################################################
+# After destination volumes are created and mapped in the FlashArray,
+# this play will come back to the DMS use the rescan API to discover the new volumes.
+# Once the new volumes are discovered, it will match with the source volume using the "serial number"
+# from FlashArray and rename the destination volumes.
+# The destination volumes will be named using format [SOURCE_VOLUME_NAME]_D
+########################################################
 -   name: Rescan DMS and Identify Volumes after Auto Allocation
     hosts: localhost # Insertion operations are REST API based therefore it will be executed locally
     become: false
     gather_facts: false
     vars_files:
-        - ../vars/dms_vars.yaml
-        - ../vars/migration_vars.yaml
+        - ../vars/config.yaml
     tasks:
         -   name: Rescan Destination Configuration
             uri:
@@ -175,14 +190,17 @@
                 force_basic_auth: true
                 validate_certs: false
             register: dest_volume_data
-
+########################################################
+# Once the source and destination volumes are both identified,
+# this play will then create migration session. Once session is created, migration will start.
+# Once the migration session finishes synchronization, head over to the "cutover" playbook.
+########################################################
 -   name: Start Migration
     hosts: localhost # Insertion operations are REST API based therefore it will be executed locally
     become: false
     gather_facts: false
     vars_files:
-        - ../vars/dms_vars.yaml
-        - ../vars/migration_vars.yaml
+        - ../vars/config.yaml
     tasks:
         # This task goes through all the source volumes, and generate a list of source/destination device name pairs
         -   name: Prepare Volume Session Parameters
