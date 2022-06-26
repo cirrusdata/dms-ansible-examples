@@ -84,4 +84,10 @@ ansible-playbook -i hosts.yaml playbooks/cutover.yaml
 ```
 ![diagram](dms/docs/cutover.svg)
 
+## Licensing
+This project is licensed under the Apache License, Version 2.0. See
+[LICENSE](https://github.com/docker/docker/blob/master/LICENSE) for the full
+license text.
 
+## Support
+This project is published as-is and no community support will be provided. [Contact](mailto:info@cdsi.us.com) Cirrus Data Professional Service Team to learn more. 
