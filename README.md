@@ -39,7 +39,9 @@ The objective of this example is to exclusively use ansible playbooks (no manual
     - All necessary **zoning changes** will be automated
     - All necessary **LUN masking** changes will be automated.
 
+
 Note 1: This sample can be run as-is using _Scenario 502_  of the Cirrus Data Solutions **LABaaS** (Lab-as-a-Service).  Contact CDS Profession Services team for access.
+
 Note 2: The generic FC-based storage is actually a Cirrus Data Solutions _Cirrus Protect On-prem Server_.
 
 # Configuration
