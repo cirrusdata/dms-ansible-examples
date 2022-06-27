@@ -29,7 +29,7 @@ apphost:
             switch_interface: fc1/4
         -   name: AppHostC1_i2
             wwpn: 21000024ff69dcab
-            switch: FabricA
+            switch: FabricB
             switch_interface: fc1/37
 
 storage:
@@ -45,7 +45,7 @@ storage:
                 wwpn: 21000060166cc13d
     destination:
         vendor: Pure
-        host: 192.168.2.8
+        host: 172.23.60.195
         fa_api_token: 852ebbc2-2ac7-db06-8834-761abc477792
         targets:
             -   name: PURE_T1
@@ -88,6 +88,11 @@ insertion:
         target: SRC_T1
         virtual_initiator_wwpn: 21013a5e0369dca1
         virtual_target_wwpn: 21013a5e036cc13c
+    -   nexus: DMS-126-Nexus1
+        initiator: AppHostC1_i2
+        target: SRC_T2
+        virtual_initiator_wwpn: 21013a5e0369dcab
+        virtual_target_wwpn: 21013a5e036cc13d
 
 ##################
 # Destination Zoning
