@@ -1,0 +1,192 @@
+---
+########################################################
+# This play will use DMS's REST API to identify the source volumes to be migrated,
+# based on what is specified in the configuration.
+# Once the source volumes are identified, it will rename the volumes to the desired name
+# according to the configuration
+########################################################
+-   name: Identify Source Volumes
+    hosts: localhost # DMS operations are REST API based therefore it will be executed locally
+    become: false
+    gather_facts: false
+    vars_files:
+        - ../vars/config.yaml
+    tasks:
+        -   name: Retrieve Source Volumes List
+            uri:
+                url: "https://{{ dms.host }}/api/source/volumes"
+                method: GET
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+            register: source_volume_data
+
+        -   name: Find Source Volumes To Be Migrated
+            set_fact:
+                source_volumes_to_be_migrated: "{{ source_volume_data.json.volumes | selectattr('uuid', 'in', (migration.source_volumes|map(attribute='uuid')|join(',')) ) }}"
+
+        -   name: Rename Source Volumes
+            uri:
+                url: "https://{{ dms.host }}/api/storage-config/volumes/actions:rename"
+                method: POST
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+                body_format: json
+                body:
+                    volumeUuid: "{{ item.uuid }}"
+                    # find desired new name from variable file using uuid
+                    newName: "{{ ( migration.source_volumes | selectattr('uuid', '==', item.uuid) | first ).name }}"
+            loop: "{{source_volumes_to_be_migrated}}"
+
+        -   name: Retrieve Source Volumes List After Rename
+            uri:
+                url: "https://{{ dms.host }}/api/source/volumes"
+                method: GET
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+            register: source_volume_data
+
+        -   name: Find Source Volumes To Be Migrated After Rename
+            set_fact:
+                source_volumes_to_be_migrated: "{{ source_volume_data.json.volumes | selectattr('uuid', 'in', (migration.source_volumes|map(attribute='uuid')|join(',')) ) }}"
+########################################################
+# this play automatically create destination volumes on PowerFlex that matches the source volumes
+# and assign to the DMS appliance SDCs
+########################################################
+-   name: Auto-Allocate Destination Volumes from PowerFlex
+    hosts: localhost
+    become: false
+    gather_facts: false
+    vars_files:
+        - ../vars/config.yaml
+    tasks:
+        -   name: Create Volume on PowerFlex
+            loop: "{{ source_volumes_to_be_migrated }}"
+            dellemc.powerflex.volume:
+                vol_name: "{{ item.deviceName }}"
+                vol_type: "THIN_PROVISIONED"
+                size: "{{ (item.capacity|int) // 1024 // 1024 // 1024}}"
+                storage_pool_name: "{{ storage.destination.storage_pool }}"
+                protection_domain_name: "{{ storage.destination.protection_domain }}"
+                state: present
+                hostname: "{{ storage.destination.host }}"
+                username: "{{ storage.destination.username }}"
+                password: "{{ storage.destination.password }}"
+                validate_certs: false
+
+            register: destination_volumes_allocated
+        -   debug:
+                var: destination_volumes_allocated
+
+        -   name: Map Volumes to CMO Appliances SDC
+            loop: "{{ source_volumes_to_be_migrated }}"
+            dellemc.powerflex.volume:
+                vol_name: "{{ item.deviceName }}"
+                sdc:
+                    - sdc_name: "{{ dms.sdc_names.primary }}"
+                      access_mode: "READ_WRITE"
+                    - sdc_name: "{{ dms.sdc_names.member }}"
+                      access_mode: "READ_WRITE"
+                allow_multiple_mappings: true
+                sdc_state: "mapped"
+                state: present
+                hostname: "{{ storage.destination.host }}"
+                username: "{{ storage.destination.username }}"
+                password: "{{ storage.destination.password }}"
+                validate_certs: false
+########################################################
+# After destination volumes are created and mapped in the FlashArray,
+# this play will come back to the DMS use the rescan API to discover the new volumes.
+# Once the new volumes are discovered, it will match with the source volume using the "serial number"
+# from FlashArray and rename the destination volumes.
+# The destination volumes will be named using format [SOURCE_VOLUME_NAME]_D
+########################################################
+-   name: Rescan DMS and Identify Volumes after Auto Allocation
+    hosts: localhost # Insertion operations are REST API based therefore it will be executed locally
+    become: false
+    gather_facts: false
+    vars_files:
+        - ../vars/config.yaml
+    tasks:
+        -   name: Rescan Destination Configuration
+            uri:
+                url: "https://{{ dms.host }}/api/destination/actions:rescan"
+                method: POST
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+
+        -   name: Retrieve Destination Volumes List
+            uri:
+                url: "https://{{ dms.host }}/api/destination/volumes"
+                method: GET
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+            register: dest_volume_data
+
+        # This task loops through the new destination volumes from powerflex, match up with the discovered volume in CMO, and rename it to [SOURCE_NAME]_D
+        -   name: Match and Rename Destination Volumes on CMO
+            uri:
+                url: "https://{{ dms.host }}/api/storage-config/volumes/actions:rename"
+                method: POST
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+                body_format: json
+                body:
+                    volumeUuid: "{{ (dest_volume_data.json.volumes | selectattr('uuid','match', '.*'+(item.volume_details.id| lower)[-12:] + '$' ) | first).uuid }}"
+                    # find desired new name from variable file using uuid
+                    newName: "{{ item.volume_details.name }}_D"
+            loop: "{{ destination_volumes_allocated.results }}"
+        -   name: Retrieve Destination Volumes List after Rename
+            uri:
+                url: "https://{{ dms.host }}/api/destination/volumes"
+                method: GET
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+            register: dest_volume_data
+########################################################
+# Once the source and destination volumes are both identified,
+# this play will then create migration session. Once session is created, migration will start.
+# Once the migration session finishes synchronization, head over to the "cutover" playbook.
+########################################################
+-   name: Start Migration
+    hosts: localhost # Insertion operations are REST API based therefore it will be executed locally
+    become: false
+    gather_facts: false
+    vars_files:
+        - ../vars/config.yaml
+    tasks:
+        # This task goes through all the source volumes, and generate a list of source/destination device name pairs
+        -   name: Prepare Volume Session Parameters
+            set_fact:
+                volume_params: "{{ volume_params|default([]) + [ {'source' : item.deviceName, 'destination': item.deviceName + '_D' } ] }}"
+            loop: "{{source_volumes_to_be_migrated}}"
+
+        -   name: Create Migration Session
+            uri:
+                url: "https://{{ dms.host }}/api/migration-sessions"
+                method: POST
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+                body_format: json
+                body:
+                    description: Created from Ansible Playbook
+                    type: LOCAL
+                    volumes: "{{ volume_params }}"
+                    skipThinBlocks: true
+                    autoResyncMinutes: 60
+                    migrationBlockSize: BLOCK_SIZE_1MB

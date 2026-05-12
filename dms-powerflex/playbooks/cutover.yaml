@@ -1,0 +1,255 @@
+---
+###################################
+# This task will synchronize migration session one more time before performing final cutover
+# This step can be repeated as often as you like until a cutover time becomes convenient
+###################################
+-   name: Synchronize Migration Session
+    hosts: localhost
+    become: false
+    gather_facts: false
+    vars_files:
+        - ../vars/config.yaml
+
+    tasks:
+        -   name: Retrieve Appliance Information from DMS
+            uri:
+                url: "https://{{ dms.host }}/api/appliances"
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+            register: appliances_data
+
+        -   name: Retrieve Migration Session Information
+            uri:
+                url: "https://{{ dms.host }}/api/migration-sessions"
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+            register: migration_session_list
+        -   name: Get Migration Session ID
+            set_fact:
+                migration_session_id: "{{ migration_session_list.json.sessions[0].id }}"
+
+        -   name: Trigger Migration Sync
+            uri:
+                url: "https://{{ dms.host }}/api/migration-sessions/{{ migration_session_id }}/actions:sync"
+                method: POST
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+
+        -   name: Wait until Migration Session goes back to Pending Complete
+            uri:
+                url: "https://{{ dms.host }}/api/migration-sessions/{{ migration_session_id }}"
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+            register: migration_session_info
+            delay: 15
+            retries: 20
+            until: "migration_session_info.json.session.status == 'PENDING_COMPLETE' or migration_session_info.json.session.status == 'COMPLETED'"
+
+###################################
+# The following tasks will be run on application host. A script is already prepared on the host to stop the sample application: the Postgres database
+# In reality, this should be modified to ensure application is stopped and cache is flushed
+# Note that this example is a simple local migration cutover that takes the application offline to transition to the new storage.
+# To learn more about alternative cutover methods, contact Cirrus Data Support.
+###################################
+-   name: Stop Application and Unmount before Final Synchronization
+    hosts: initiator
+    become: false
+    gather_facts: false
+    vars_files:
+        - ../vars/config.yaml
+    vars:
+        ansible_host: "{{ apphost.host }}"
+        ansible_user: "{{ apphost.username }}"
+        ansible_password: "{{ apphost.password }}"
+    tasks:
+        -   name: Shutdown Application and Unmount data disks
+            shell:
+                cmd: bash /root/C_Post_Insertion/26_StopAppUnmountDisableLv.sh
+        -   name: Gather hostname for later host creation
+            shell:
+                cmd: hostname
+            register: hostname_out
+        -   name: Store Hostname to fact
+            set_fact:
+                apphost_hostname: "{{ hostname_out.stdout }}"
+
+
+###################################
+# This play will go back to the DMS and complete the migration session.
+# Once a migration session is completed, tracking will stop and migration session will be concluded.
+###################################
+-   name: Complete Migration Session
+    hosts: localhost
+    become: false
+    gather_facts: false
+    vars_files:
+        - ../vars/config.yaml
+    tasks:
+        -   name: Trigger Migration Completion
+            uri:
+                url: "https://{{ dms.host }}/api/migration-sessions/{{ migration_session_id }}/actions:finalize"
+                method: POST
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+            when: "migration_session_info.json.session.status != 'COMPLETED'"
+
+        -   name: Wait until Migration Session is Completed
+            uri:
+                url: "https://{{ dms.host }}/api/migration-sessions/{{ migration_session_id }}"
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+            register: migration_session_info
+            delay: 2
+            retries: 100
+            until: "migration_session_info.json.session.status == 'COMPLETED'"
+
+###################################
+# This play will then remove insertion zones from the switch.
+# Once removed, host will no longer be connected to DMS upstream port
+###################################
+-   name: Removing Insertion Zones
+    hosts: switch
+    vars_files:
+        - ../vars/config.yaml
+    become: false
+    gather_facts: false
+    vars:
+    tasks:
+        -   name: Remove Zones from active zoneset
+            loop: "{{ insertion }}"
+            vars:
+                switch: "{{ switches | selectattr('name','==',insert_nexus.switch)  | first }}"
+                insert_nexus: "{{ dms.nexus | selectattr('name','==',item.nexus)  | first}}"
+                insert_initiator: "{{ apphost.ports | selectattr('name','==',item.initiator)  | first}}"
+                insert_target: "{{ storage.source.targets | selectattr('name','==',item.target)  | first}}"
+                zones:
+                    downstream_to_target: "ans-{{insert_nexus.name}}-downstream-to-{{insert_target.name}}"
+                    virtual_initiator_to_target: "ans-V{{insert_initiator.name}}-to-{{insert_target.name}}"
+                    initiator_to_virtual_target: "ans-{{insert_initiator.name}}-to-V{{insert_target.wwpn}}"
+
+                ansible_host: "{{ (switches | selectattr('name','==',insert_nexus.switch)  | first).host }}"
+                ansible_user: "{{ (switches | selectattr('name','==',insert_nexus.switch)  | first).username }}"
+                ansible_password: "{{ (switches | selectattr('name','==',insert_nexus.switch)  | first).password }}"
+
+            cisco.nxos.nxos_zone_zoneset:
+                zone_zoneset_details:
+                    -   vsan: "{{switch.vsan}}"
+                        mode: basic
+                        zoneset:
+                            -   action: activate
+                                remove: false
+                                name: "{{ switch.zoneset }}"
+                                members:
+                                    -   name: "{{zones.downstream_to_target}}"
+                                        remove: true
+                                    -   name: "{{zones.initiator_to_virtual_target}}"
+                                        remove: true
+                                    -   name: "{{zones.virtual_initiator_to_target}}"
+                                        remove: true
+
+        -   name: Delete Zones
+            loop: "{{ insertion }}"
+            vars:
+                switch: "{{ switches | selectattr('name','==',insert_nexus.switch)  | first }}"
+                insert_nexus: "{{ dms.nexus | selectattr('name','==',item.nexus)  | first}}"
+                insert_initiator: "{{ apphost.ports | selectattr('name','==',item.initiator)  | first}}"
+                insert_target: "{{ storage.source.targets | selectattr('name','==',item.target)  | first}}"
+                zones:
+                    downstream_to_target: "ans-{{insert_nexus.name}}-downstream-to-{{insert_target.name}}"
+                    virtual_initiator_to_target: "ans-V{{insert_initiator.name}}-to-{{insert_target.name}}"
+                    initiator_to_virtual_target: "ans-{{insert_initiator.name}}-to-V{{insert_target.wwpn}}"
+
+                ansible_host: "{{ (switches | selectattr('name','==',insert_nexus.switch)  | first).host }}"
+                ansible_user: "{{ (switches | selectattr('name','==',insert_nexus.switch)  | first).username }}"
+                ansible_password: "{{ (switches | selectattr('name','==',insert_nexus.switch)  | first).password }}"
+            cisco.nxos.nxos_zone_zoneset:
+                zone_zoneset_details:
+                    -   vsan: "{{switch.vsan}}"
+                        mode: basic
+                        zone:
+                            -   remove: true
+                                name: "{{zones.downstream_to_target}}"
+                            -   remove: true
+                                name: "{{zones.virtual_initiator_to_target}}"
+                            -   remove: true
+                                name: "{{zones.initiator_to_virtual_target}}"
+###################################
+# This play will then assign the migrated volumes to the host directly on PowerFlex
+###################################
+-   name: Map Migrated Volumes to Application Host
+    hosts: localhost
+    become: false
+    gather_facts: false
+    vars_files:
+        - ../vars/config.yaml
+    tasks:
+        -   name: Map Migrated Volumes to Application Host Entity on PowerFlex
+            loop: "{{ migration.source_volumes }}"
+            dellemc.powerflex.volume:
+                vol_name: "{{ item.name }}"
+                sdc:
+                    -   sdc_name: "{{ apphost.sdc_name }}"
+                        access_mode: "READ_WRITE"
+                allow_multiple_mappings: true
+                sdc_state: "mapped"
+                state: present
+                hostname: "{{ storage.destination.host }}"
+                username: "{{ storage.destination.username }}"
+                password: "{{ storage.destination.password }}"
+                validate_certs: false
+
+        -   name: Unmap Migrated Volumes from CMO Appliances SDC
+            loop: "{{ migration.source_volumes }}"
+            dellemc.powerflex.volume:
+                vol_name: "{{ item.name }}"
+                sdc:
+                    -   sdc_name: "{{ dms.sdc_names.primary }}"
+                        access_mode: "READ_WRITE"
+                    -   sdc_name: "{{ dms.sdc_names.member }}"
+                        access_mode: "READ_WRITE"
+                allow_multiple_mappings: true
+                sdc_state: "unmapped"
+                state: present
+                hostname: "{{ storage.destination.host }}"
+                username: "{{ storage.destination.username }}"
+                password: "{{ storage.destination.password }}"
+                validate_certs: false
+
+###################################
+# After new zones are created, the following play will rescan on the application host, which will pick up the
+# new paths directly to the new storage, and start application
+###################################
+-   name: Rescan and Restart Application
+    hosts: initiator
+    become: false
+    gather_facts: false
+    vars_files:
+        - ../vars/config.yaml
+    vars:
+        ansible_host: "{{ apphost.host }}"
+        ansible_user: "{{ apphost.username }}"
+        ansible_password: "{{ apphost.password }}"
+    tasks:
+        -   name: Restart Multipath Service
+            systemd:
+                state: restarted
+                name: multipathd
+        -   name: Rescan Multipath
+            shell:
+                cmd: multipath
+
+        -   name: Start Application
+            shell:
+                cmd: bash /root/C_Post_Insertion/30_RescanHostAndActivateLvDB.sh

@@ -1,0 +1,316 @@
+---
+-   name: Parse Configuration
+    hosts: localhost
+    become: false
+    gather_facts: false
+    vars_files:
+        - ../vars/config.yaml
+    tasks:
+        -   name: Ensure sequence is set
+            debug:
+                msg: "Inserting Seq {{ sequence }}: {{ insertion[sequence|int] }}"
+            failed_when: sequence is not defined
+        -   name: Set Insertion Config
+            set_fact:
+                insertion_config: "{{ insertion[sequence|int] }}"
+        -   debug:
+                var: insertion_config
+
+        -   name: Identify Insertion Entities
+            set_fact:
+                insert_nexus: "{{ dms.nexus | selectattr('name','==',insertion_config.nexus)  | first}}"
+                insert_initiator: "{{ apphost.ports | selectattr('name','==',insertion_config.initiator)  | first}}"
+                insert_target: "{{ storage.source.targets | selectattr('name','==',insertion_config.target)  | first}}"
+        -   name: Identify Switch For Insertion
+            set_fact:
+                insert_switch: "{{ switches | selectattr('name','==',insert_nexus.switch)  | first}}"
+        -   name: Identify Insertion Zone Names
+            set_fact:
+                zones:
+                    downstream_to_target: "ans-{{insert_nexus.name}}-downstream-to-{{insert_target.name}}"
+                    virtual_initiator_to_target: "ans-V{{insert_initiator.name}}-to-{{insert_target.name}}"
+                    initiator_to_virtual_target: "ans-{{insert_initiator.name}}-to-V{{insert_target.wwpn}}"
+
+-   name: Prepare Switch For Insertion
+    hosts: switch
+    vars_files:
+        - ../vars/config.yaml
+    become: false
+    gather_facts: false
+    vars:
+        # Copy Variables for easier access
+        insert_nexus: "{{hostvars.localhost.insert_nexus}}"
+        insert_initiator: "{{hostvars.localhost.insert_initiator}}"
+        insert_target: "{{hostvars.localhost.insert_target}}"
+        insert_targetinsert_switch: "{{hostvars.localhost.insert_switch}}"
+        insertion_config: "{{hostvars.localhost.insertion_config}}"
+        zones: "{{hostvars.localhost.zones}}"
+
+        # set switch execution
+        ansible_host: "{{ hostvars.localhost.insert_switch.host }}"
+        ansible_user: "{{ hostvars.localhost.insert_switch.username }}"
+        ansible_password: "{{ hostvars.localhost.insert_switch.password }}"
+
+    tasks:
+        -   name: Ensure NPIV feature is enabled
+            cisco.nxos.nxos_feature:
+                feature: npiv
+                state: enabled
+
+        -   name: Enable Nexus Switch Ports
+            cisco.nxos.nxos_command:
+                commands:
+                    - config
+                    - "interface {{ insert_nexus.upstream_switch_interface }}"
+                    - no shutdown
+                    - "interface {{ insert_nexus.downstream_switch_interface }}"
+                    - no shutdown
+                    - exit
+
+-   name: Prepare DMS For Insertion
+    hosts: localhost # Insertion operations are REST API based therefore it will be executed locally
+    become: false
+    gather_facts: false
+    vars_files:
+        - ../vars/config.yaml
+    tasks:
+        -   name: Retrieve Nexus Information from DMS
+            uri:
+                url: "https://{{ dms.host }}/api/nexus"
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+            register: nexus_list
+
+        -   name: Setting Nexus Info Fact
+            set_fact:
+                nexus_info: "{{ nexus_list.json.nexuses | selectattr('nexusName','==', insert_nexus.name )| first }}"
+
+        -   name: Activate Nexus For Insertion
+            uri:
+                url: "https://{{ dms.host }}/api/nexus/{{ insert_nexus.name }}/standby"
+                method: DELETE
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+
+        -   name: Create Downstream Insertion Mapping
+            uri:
+                url: "https://{{ dms.host }}/api/nexus/{{ insert_nexus.name }}/path-insertion-port-mappings"
+                method: POST
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+                body_format: json
+                body:
+                    upstream: false
+                    wwpn: "{{insert_target.wwpn}}"
+                    toWwpn: "{{insertion_config.virtual_target_wwpn}}"
+
+        -   name: Create Upstream Insertion Mapping
+            uri:
+                url: "https://{{ dms.host }}/api/nexus/{{ insert_nexus.name }}/path-insertion-port-mappings"
+                method: POST
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+                body_format: json
+                body:
+                    upstream: true
+                    wwpn: "{{insert_initiator.wwpn}}"
+                    toWwpn: "{{insertion_config.virtual_initiator_wwpn}}"
+
+-   name: Creating Insertion Zones
+    hosts: switch
+    vars_files:
+        - ../vars/config.yaml
+    become: false
+    gather_facts: false
+    vars:
+        # Copy Variables for easier access
+        insert_nexus: "{{hostvars.localhost.insert_nexus}}"
+        insert_initiator: "{{hostvars.localhost.insert_initiator}}"
+        insert_target: "{{hostvars.localhost.insert_target}}"
+        insert_switch: "{{hostvars.localhost.insert_switch}}"
+        insertion_config: "{{hostvars.localhost.insertion_config}}"
+        zones: "{{hostvars.localhost.zones}}"
+
+        # set switch execution
+        ansible_host: "{{ hostvars.localhost.insert_switch.host }}"
+        ansible_user: "{{ hostvars.localhost.insert_switch.username }}"
+        ansible_password: "{{ hostvars.localhost.insert_switch.password }}"
+    tasks:
+        -   name: Create Downstream to Target Zone
+            cisco.nxos.nxos_zone_zoneset:
+                zone_zoneset_details:
+                    -   vsan: "{{insert_switch.vsan}}"
+                        mode: basic
+                        zone:
+                            -   members:
+                                    -   pwwn: "{{hostvars.localhost.nexus_info.downstreamHba.wwpn}}"
+                                    -   pwwn: "{{insert_target.wwpn}}"
+                                name: "{{zones.downstream_to_target}}"
+        -   name: Create Virtual Initiators to Target Zone
+            cisco.nxos.nxos_zone_zoneset:
+                zone_zoneset_details:
+                    -   vsan: "{{insert_switch.vsan}}"
+                        mode: basic
+                        zone:
+                            -   members:
+                                    -   pwwn: "{{insertion_config.virtual_initiator_wwpn}}"
+                                    -   pwwn: "{{insert_target.wwpn}}"
+                                name: "{{zones.virtual_initiator_to_target}}"
+
+        -   name: Create Initiator to Virtual Target Zone
+            cisco.nxos.nxos_zone_zoneset:
+                zone_zoneset_details:
+                    -   vsan: "{{insert_switch.vsan}}"
+                        mode: basic
+                        zone:
+                            -   members:
+                                    -   pwwn: "{{insert_initiator.wwpn}}"
+                                    -   pwwn: "{{insertion_config.virtual_target_wwpn}}"
+                                name: "{{zones.initiator_to_virtual_target}}"
+
+        -   name: Add New Zones to active zoneset
+            cisco.nxos.nxos_zone_zoneset:
+                zone_zoneset_details:
+                    -   vsan: "{{insert_switch.vsan}}"
+                        mode: basic
+                        zoneset:
+                            -   action: activate
+                                remove: false
+                                name: "{{ insert_switch.zoneset }}"
+                                members:
+                                    -   name: "{{zones.downstream_to_target}}"
+                                    -   name: "{{zones.initiator_to_virtual_target}}"
+                                    -   name: "{{zones.virtual_initiator_to_target}}"
+
+
+-   name: Add Virtual Path to Source Storage via LUN Masking
+    hosts: localhost # Storage operations are REST API based therefore it will be executed locally
+    become: false
+    gather_facts: false
+    vars_files:
+        - ../vars/config.yaml
+    tasks:
+        -   name: Add Virtual Initiator to Host Entity
+            uri:
+                url: "https://{{ storage.source.host }}/api/v1/storage/clients/{{ apphost.host_entity_id_in_storage }}/initiators"
+                method: PATCH
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+                body_format: json
+                body:
+                    add:
+                        -   type: FC
+                            initiator: "{{ insertion_config.virtual_initiator_wwpn }}"
+
+-   name: Host Rescan for New Path
+    hosts: initiator
+    vars_files:
+        - ../vars/config.yaml
+    become: false
+    gather_facts: false
+    vars:
+        ansible_host: "{{ apphost.host }}"
+        ansible_user: "{{ apphost.username }}"
+        ansible_password: "{{ apphost.password }}"
+    tasks:
+        -   name: Run Multipath Command
+            shell:
+                cmd: multipath -ll
+            register: multipath_output
+
+        -   name: Print Multipath Output
+            debug:
+                var: multipath_output.stdout_lines
+
+        -   name: Rescan SCSI Hosts
+            shell:
+                cmd: rescan-scsi-bus.sh -a -r
+
+        -   name: Run Multipath Command After Rescan
+            shell:
+                cmd: multipath -ll
+            register: multipath_output
+
+        -   name: Print Multipath Output After Rescan
+            debug:
+                var: multipath_output.stdout_lines
+
+
+-   name: Remove Original Path to Source Storage via LUN Masking
+    hosts: localhost # Storage operations are REST API based therefore it will be executed locally
+    become: false
+    gather_facts: false
+    vars_files:
+        - ../vars/config.yaml
+    tasks:
+        -   name: Get All Initiators from Host Entity at Source Storage
+            uri:
+                url: "https://{{ storage.source.host }}/api/v1/storage/clients/{{ apphost.host_entity_id_in_storage }}"
+                method: GET
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+            register: host_info_from_source_storage
+        -   name: Find Original Initiator in Host Entity
+            set_fact:
+                source_storage_original_initiator_id: "{{ (host_info_from_source_storage.json.initiators | selectattr('initiator', '==', insert_initiator.wwpn) | first).id }}"
+        -   name: Remove Original Initiator from Host Entity
+            uri:
+                url: "https://{{ storage.source.host }}/api/v1/storage/clients/{{ apphost.host_entity_id_in_storage }}/initiators"
+                method: PATCH
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+                body_format: json
+                body: '{"remove" : [{{source_storage_original_initiator_id}}]}'
+
+
+-   name: Host Rescan after Original Path is removed
+    hosts: initiator
+    vars_files:
+        - ../vars/config.yaml
+    become: false
+    gather_facts: false
+    vars:
+        ansible_host: "{{ apphost.host }}"
+        ansible_user: "{{ apphost.username }}"
+        ansible_password: "{{ apphost.password }}"
+    tasks:
+        -   name: Rescan SCSI Hosts
+            shell:
+                cmd: rescan-scsi-bus.sh -a -r
+        -   name: Run Multipath Command After Rescan
+            shell:
+                cmd: multipath -ll
+            register: multipath_output
+        -   name: Print Multipath Output After Rescan
+            debug:
+                var: multipath_output.stdout_lines
+
+-   name: Rescan DMS after Insertion
+    hosts: localhost # Insertion operations are REST API based therefore it will be executed locally
+    become: false
+    gather_facts: false
+    vars_files:
+        - ../vars/config.yaml
+    tasks:
+        -   name: Rescan Source Configuration
+            uri:
+                url: "https://{{ dms.host }}/api/source/actions:rescan"
+                method: POST
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false

@@ -1,0 +1,96 @@
+switches:
+    -   name: FabricA
+        host: 172.23.60.238
+        username: admin
+        password: CHANGE_ME
+        vsan: 1
+        zoneset: SW238VSAN1
+
+    -   name: FabricB
+        host: 172.23.60.238
+        username: admin
+        password: CHANGE_ME
+        vsan: 2
+        zoneset: SW238VSAN2
+
+
+apphost:
+    host: 172.23.60.121
+    username: root
+    password: CHANGE_ME
+
+    # SDC Name in PowerFlex (host)
+    sdc_name : "lincos7-121"
+
+    ports:
+        -   name: AppHostC1_i1
+            wwpn: 21000024ff69dca1
+            switch: FabricA
+            switch_interface: fc1/4
+        -   name: AppHostC1_i2
+            wwpn: 21000024ff69dcab
+            switch: FabricB
+            switch_interface: fc1/37
+
+storage:
+    source:
+        vendor: CirrusData
+        host: 172.23.60.197
+        username: admin
+        password: CHANGE_ME
+        targets:
+            -   name: SRC_T1
+                wwpn: 21000060166cc13c
+            -   name: SRC_T2
+                wwpn: 21000060166cc13d
+    destination:
+        vendor: PowerFlex
+        host: 172.28.0.121
+        username: admin
+        password: CHANGE_ME
+        storage_pool: sp01
+        protection_domain: pd01
+
+dms:
+    host: 172.23.60.125
+    username: admin
+    password: CHANGE_ME
+
+    # SDC Names in PowerFlex (dms appliances)
+    sdc_names:
+        primary: "dms-125"
+        member: "dms-126"
+
+    nexus:
+        -   name: DMS-125-Nexus1
+            switch: FabricA
+            upstream_switch_interface: fc1/3
+            downstream_switch_interface: fc1/4
+
+        -   name: DMS-126-Nexus1
+            switch: FabricB
+            upstream_switch_interface: fc1/35
+            downstream_switch_interface: fc1/36
+
+insertion:
+    -   nexus: DMS-125-Nexus1
+        initiator: AppHostC1_i1
+        target: SRC_T1
+        virtual_initiator_wwpn: 21013a5e0369dca1
+        virtual_target_wwpn: 21013a5e036cc13c
+    -   nexus: DMS-126-Nexus1
+        initiator: AppHostC1_i2
+        target: SRC_T2
+        virtual_initiator_wwpn: 21013a5e0369dcab
+        virtual_target_wwpn: 21013a5e036cc13d
+
+migration:
+    source_volumes:
+        -   uuid: 6006016f-3466-c0aa-2753-000000000001
+            name: DiskA
+        -   uuid: 6006016f-3466-c0aa-2753-000000000002
+            name: DiskB
+        -   uuid: 6006016f-3466-c0aa-2753-000000000003
+            name: DiskC
+        -   uuid: 6006016f-3466-c0aa-2753-000000000004
+            name: DiskK

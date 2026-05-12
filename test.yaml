@@ -1,0 +1,67 @@
+---
+-   name: Identify Insertion Configuration Specified
+    hosts: localhost
+    become: false
+    gather_facts: false
+    vars_files:
+        - ./dms-powerflex/vars/config.yaml
+    tasks:
+        -   name: Create Volume on PowerFlex
+            dellemc.powerflex.volume:
+                vol_name: "test12345"
+                vol_type: "THIN_PROVISIONED"
+                size: "6"
+                state: present
+                storage_pool_name: "{{ storage.destination.storage_pool }}"
+                protection_domain_name: "{{ storage.destination.protection_domain }}"
+                hostname: "{{ storage.destination.host }}"
+                username: "{{ storage.destination.username }}"
+                password: "{{ storage.destination.password }}"
+                validate_certs: false
+
+            register: destination_volumes_allocated
+        -   debug:
+                var: destination_volumes_allocated
+
+        -   name: Map Volumes to CMO Appliances SDC
+            dellemc.powerflex.volume:
+                vol_name: "test12345"
+                sdc:
+                    - sdc_name: "{{ dms.sdc_names.primary }}"
+                      access_mode: "READ_WRITE"
+                    - sdc_name: "{{ dms.sdc_names.member }}"
+                      access_mode: "READ_WRITE"
+                sdc_state: "mapped"
+                state: present
+                allow_multiple_mappings: true
+                hostname: "{{ storage.destination.host }}"
+                username: "{{ storage.destination.username }}"
+                password: "{{ storage.destination.password }}"
+                validate_certs: false
+
+
+        -   name: Retrieve Destination Volumes List
+            uri:
+                url: "https://{{ dms.host }}/api/destination/volumes"
+                method: GET
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+            register: dest_volume_data
+
+        # This task loops through the new destination volumes from pure, match up with the discovered volume in DMS, and rename it to [SOURCE_NAME]_D
+        -   name: Match and Rename Destination Volumes on DMS
+            uri:
+                url: "https://{{ dms.host }}/api/storage-config/volumes/actions:rename"
+                method: POST
+                url_username: "{{dms.username}}"
+                url_password: "{{dms.password}}"
+                force_basic_auth: true
+                validate_certs: false
+                body_format: json
+                body:
+                    volumeUuid: "{{ (dest_volume_data.json.volumes | selectattr('uuid','match', '.*'+(item.volume_details.id| lower)[-12:] + '$' ) | first).uuid }}"
+                    # find desired new name from variable file using uuid
+                    newName: "{{ item.volume.name }}_D"
+            loop: "{{ destination_volumes_allocated.results }}"
